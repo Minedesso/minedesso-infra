@@ -1,0 +1,33 @@
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: proxy-net
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@minedesso.dev
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json

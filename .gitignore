@@ -1,0 +1,4 @@
+.env
+secrets/
+velocity/forwarding.secret
+backups/

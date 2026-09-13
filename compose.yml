@@ -1,0 +1,333 @@
+name: minedesso
+
+services:
+  # ===========================================================================
+  # Reverse Proxy
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-acme:/acme
+    secrets:
+      - dashboard-htpasswd
+    networks:
+      - proxy-net
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.dashboard.rule: Host(`traefik.${DOMAIN}`)
+      traefik.http.routers.dashboard.service: api@internal
+      traefik.http.routers.dashboard.entrypoints: websecure
+      traefik.http.routers.dashboard.tls: "true"
+      traefik.http.routers.dashboard.tls.certresolver: letsencrypt
+      traefik.http.routers.dashboard.middlewares: dashboard-auth
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # Angular Frontend
+  # ===========================================================================
+  angular:
+    image: ghcr.io/minedesso/frontend:${FRONTEND_VERSION}
+    restart: unless-stopped
+    networks:
+      - proxy-net
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.angular.rule: Host(`${DOMAIN}`)
+      traefik.http.routers.angular.entrypoints: websecure
+      traefik.http.routers.angular.tls: "true"
+      traefik.http.routers.angular.tls.certresolver: letsencrypt
+      traefik.http.services.angular.loadbalancer.server.port: 80
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # Spring Backend API 1
+  # ===========================================================================
+  backend-api:
+    image: ghcr.io/minedesso/backend-api:${BACKEND_API_VERSION}
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/minedesso
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${BACKEND_API_DB_PASSWORD}
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${KEYCLOAK_ISSUER_URI}
+      SERVER_SERVLET_CONTEXT_PATH: /api
+    networks:
+      - proxy-net
+      - backend-net
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.backend-api.rule: Host(`api.${DOMAIN}`)
+      traefik.http.routers.backend-api.entrypoints: websecure
+      traefik.http.routers.backend-api.tls: "true"
+      traefik.http.routers.backend-api.tls.certresolver: letsencrypt
+      traefik.http.services.backend-api.loadbalancer.server.port: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ===========================================================================
+  # Spring Backend API 2 (IsleWars)
+  # ===========================================================================
+  islewars-api:
+    image: ghcr.io/minedesso/islewars-api:${ISLEWARS_API_VERSION}
+    restart: unless-stopped
+    environment:
+      ISLEWARS_DB_URL: jdbc:postgresql://postgres:5432/islewars
+      ISLEWARS_DB_USERNAME: postgres
+      ISLEWARS_DB_PASSWORD: ${ISLEWARS_API_DB_PASSWORD}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI}
+      ISLEWARS_API_CLIENT_NAME: islewars-plugin
+      ISLEWARS_API_CLIENT_KEY: ${ISLEWARS_API_CLIENT_KEY}
+      ISLEWARS_API_PORT: 8081
+    networks:
+      - proxy-net
+      - backend-net
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.islewars-api.rule: Host(`islewars-api.${DOMAIN}`)
+      traefik.http.routers.islewars-api.entrypoints: websecure
+      traefik.http.routers.islewars-api.tls: "true"
+      traefik.http.routers.islewars-api.tls.certresolver: letsencrypt
+      traefik.http.services.islewars-api.loadbalancer.server.port: 8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ===========================================================================
+  # PostgreSQL
+  # ===========================================================================
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: minedesso
+      POSTGRES_MULTIPLE_DATABASES: islewars
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ===========================================================================
+  # Keycloak
+  # ===========================================================================
+  keycloak:
+    image: keycloak:26.4
+    restart: unless-stopped
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME: auth.${DOMAIN}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+    command: start
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    networks:
+      - proxy-net
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.keycloak.rule: Host(`auth.${DOMAIN}`)
+      traefik.http.routers.keycloak.entrypoints: websecure
+      traefik.http.routers.keycloak.tls: "true"
+      traefik.http.routers.keycloak.tls.certresolver: letsencrypt
+      traefik.http.services.keycloak.loadbalancer.server.port: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080; echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; cat <&3 | head -1 | grep '200'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ===========================================================================
+  # Velocity Proxy
+  # ===========================================================================
+  velocity:
+    image: papermc/velocity:${VELOCITY_VERSION}
+    restart: unless-stopped
+    volumes:
+      - ./velocity/velocity.toml:/home/velocity/velocity.toml:ro
+      - ./velocity/forwarding.secret:/home/velocity/forwarding.secret:ro
+    ports:
+      - "25565:25565"
+    networks:
+      - minecraft-net
+    depends_on:
+      lobby:
+        condition: service_healthy
+
+  # ===========================================================================
+  # Minecraft - Lobby
+  # ===========================================================================
+  lobby:
+    image: ghcr.io/minedesso/lobby:${LOBBY_VERSION}
+    restart: unless-stopped
+    environment:
+      EULA: "TRUE"
+      MEMORY: 384M
+      VELOCITY_ENABLED: "true"
+      VELOCITY_SECRET: ${VELOCITY_FORWARDING_SECRET}
+      API_URL: http://backend-api:8080/api
+    volumes:
+      - lobby-data:/data
+      - lobby-logs:/logs
+    networks:
+      - backend-net
+      - minecraft-net
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mc-monitor", "status", "--host", "localhost", "--port", "25565"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # ===========================================================================
+  # Minecraft - Citybuild
+  # ===========================================================================
+  citybuild:
+    image: ghcr.io/minedesso/citybuild:${CITYBUILD_VERSION}
+    restart: unless-stopped
+    environment:
+      EULA: "TRUE"
+      MEMORY: 768M
+      VELOCITY_ENABLED: "true"
+      VELOCITY_SECRET: ${VELOCITY_FORWARDING_SECRET}
+      API_URL: http://backend-api:8080/api
+    volumes:
+      - citybuild-data:/data
+      - citybuild-logs:/logs
+    networks:
+      - backend-net
+      - minecraft-net
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mc-monitor", "status", "--host", "localhost", "--port", "25565"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # ===========================================================================
+  # Minecraft - IsleWars
+  # ===========================================================================
+  islewars:
+    image: ghcr.io/minedesso/islewars:${ISLEWARS_VERSION}
+    restart: unless-stopped
+    environment:
+      EULA: "TRUE"
+      MEMORY: 512M
+      VELOCITY_ENABLED: "true"
+      VELOCITY_SECRET: ${VELOCITY_FORWARDING_SECRET}
+      ISLEWARS_API_NAME: islewars-plugin
+      ISLEWARS_API_KEY: ${ISLEWARS_API_CLIENT_KEY}
+    volumes:
+      - islewars-data:/data
+      - islewars-logs:/logs
+      - ./islewars/config.yml:/plugins/islewars-plugin/config.yml:ro
+      - ./islewars/config.yml:/plugins/islewars-plugin/config.yml:ro
+    networks:
+      - backend-net
+      - minecraft-net
+    depends_on:
+      islewars-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mc-monitor", "status", "--host", "localhost", "--port", "25565"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  proxy-net:
+    name: proxy-net
+    driver: bridge
+  backend-net:
+    name: backend-net
+    driver: bridge
+  minecraft-net:
+    name: minecraft-net
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  traefik-acme:
+    name: traefik-acme
+  postgres-data:
+    name: postgres-data
+  keycloak-data:
+    name: keycloak-data
+  lobby-data:
+    name: lobby-data
+  lobby-logs:
+    name: lobby-logs
+  citybuild-data:
+    name: citybuild-data
+  citybuild-logs:
+    name: citybuild-logs
+  islewars-data:
+    name: islewars-data
+  islewars-logs:
+    name: islewars-logs
+
+# =============================================================================
+# Secrets
+# =============================================================================
+secrets:
+  dashboard-htpasswd:
+    file: ./secrets/dashboard-htpasswd

@@ -1,0 +1,8 @@
+isle-wars-api:
+  base-url: "http://islewars-api:8081"
+  server-id: "islewars-01"
+  name: "islewars-plugin"
+  api-key: ""
+  connect-timeout-millis: 3000
+  request-timeout-millis: 5000
+  retry-seconds: 10

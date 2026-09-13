@@ -1,0 +1,225 @@
+name: Build & Push Minecraft Server Images
+
+on:
+  push:
+    branches: [main, development]
+    tags: ['v*']
+  pull_request:
+    branches: [main, development]
+
+env:
+  REGISTRY: ghcr.io
+  ORG: Minedesso
+
+jobs:
+  download-plugins:
+    runs-on: ubuntu-latest
+    outputs:
+      ban-plugin-version: ${{ steps.ban.outputs.version }}
+      lobby-plugin-version: ${{ steps.lobby.outputs.version }}
+      essential-plugin-version: ${{ steps.essential.outputs.version }}
+      islewars-plugin-version: ${{ steps.islewars.outputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build ban-plugin
+        run: |
+          git clone --depth 1 https://github.com/Minedesso/ban-plugin.git /tmp/ban-plugin
+          cd /tmp/ban-plugin && mvn clean package -DskipTests
+          cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/lobby/plugins/
+          cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/citybuild/plugins/
+          cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/islewars/plugins/
+          echo "version=$(ls target/Ban-Plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+        id: ban
+
+      - name: Build lobby-plugin
+        run: |
+          git clone --depth 1 https://github.com/Minedesso/lobby-plugin.git /tmp/lobby-plugin
+          cd /tmp/lobby-plugin && mvn clean package -DskipTests
+          cp target/lobby-plugin-*.jar ${{ github.workspace }}/docker/lobby/plugins/
+          echo "version=$(ls target/lobby-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+        id: lobby
+
+      - name: Build essential-plugin
+        run: |
+          git clone --depth 1 https://github.com/Minedesso/essential-plugin.git /tmp/essential-plugin
+          cd /tmp/essential-plugin && mvn clean package -DskipTests
+          cp target/essential-plugin-*.jar ${{ github.workspace }}/docker/citybuild/plugins/
+          echo "version=$(ls target/essential-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+        id: essential
+
+      - name: Build islewars-plugin
+        run: |
+          git clone --depth 1 https://github.com/Minedesso/islewars-plugin.git /tmp/islewars-plugin
+          cd /tmp/islewars-plugin && mvn clean package -DskipTests
+          cp target/islewars-plugin-*.jar ${{ github.workspace }}/docker/islewars/plugins/
+          echo "version=$(ls target/islewars-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+        id: islewars
+
+      - name: Upload lobby plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: lobby-plugins
+          path: docker/lobby/plugins/*.jar
+          retention-days: 1
+
+      - name: Upload citybuild plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: citybuild-plugins
+          path: docker/citybuild/plugins/*.jar
+          retention-days: 1
+
+      - name: Upload islewars plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: islewars-plugins
+          path: docker/islewars/plugins/*.jar
+          retention-days: 1
+
+  build-lobby:
+    needs: [download-plugins]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download lobby plugins
+        uses: actions/download-artifact@v4
+        with:
+          name: lobby-plugins
+          path: docker/lobby/plugins
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.ORG }}/lobby
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/lobby
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-citybuild:
+    needs: [download-plugins]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download citybuild plugins
+        uses: actions/download-artifact@v4
+        with:
+          name: citybuild-plugins
+          path: docker/citybuild/plugins
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.ORG }}/citybuild
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/citybuild
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-islewars:
+    needs: [download-plugins]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download islewars plugins
+        uses: actions/download-artifact@v4
+        with:
+          name: islewars-plugins
+          path: docker/islewars/plugins
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.ORG }}/islewars
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/islewars
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

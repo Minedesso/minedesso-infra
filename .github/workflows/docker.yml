@@ -4,12 +4,23 @@ on:
   push:
     branches: [main, development]
     tags: ['v*']
+  repository_dispatch:
+    types: [plugin-updated]
+  workflow_dispatch:
   pull_request:
     branches: [main, development]
 
+permissions:
+  contents: read
+
+# Every run builds all current main plugins, so a superseded pending run loses no update.
+concurrency:
+  group: minecraft-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
-  ORG: Minedesso
+  ORG: minedesso
 
 jobs:
   download-plugins:
@@ -24,17 +35,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate deployment scripts and Compose
+        run: |
+          for script in scripts/deploy.sh scripts/deploy-minecraft scripts/minecraft-ssh; do bash -n "$script"; done
+          python3 scripts/test_deployment.py
+          docker compose --env-file .env.example config --quiet
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
+
+      - name: Prepare plugin directories
+        run: mkdir -p docker/{lobby,citybuild,islewars}/plugins
 
       - name: Build ban-plugin
         run: |
-          git clone --depth 1 https://github.com/Minedesso/ban-plugin.git /tmp/ban-plugin
-          cd /tmp/ban-plugin && mvn clean package -DskipTests
+          git clone --depth 1 --branch main https://github.com/Minedesso/ban-plugin.git /tmp/ban-plugin
+          git -C /tmp/ban-plugin rev-parse HEAD >> "${{ github.workspace }}/plugin-revisions.txt"
+          cd /tmp/ban-plugin && mvn -B -ntp clean verify
           cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/lobby/plugins/
           cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/citybuild/plugins/
           cp target/Ban-Plugin-*.jar ${{ github.workspace }}/docker/islewars/plugins/
@@ -43,27 +63,37 @@ jobs:
 
       - name: Build lobby-plugin
         run: |
-          git clone --depth 1 https://github.com/Minedesso/lobby-plugin.git /tmp/lobby-plugin
-          cd /tmp/lobby-plugin && mvn clean package -DskipTests
+          git clone --depth 1 --branch main https://github.com/Minedesso/lobby-plugin.git /tmp/lobby-plugin
+          git -C /tmp/lobby-plugin rev-parse HEAD >> "${{ github.workspace }}/plugin-revisions.txt"
+          cd /tmp/lobby-plugin && mvn -B -ntp clean verify
           cp target/lobby-plugin-*.jar ${{ github.workspace }}/docker/lobby/plugins/
           echo "version=$(ls target/lobby-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
         id: lobby
 
       - name: Build essential-plugin
         run: |
-          git clone --depth 1 https://github.com/Minedesso/essential-plugin.git /tmp/essential-plugin
-          cd /tmp/essential-plugin && mvn clean package -DskipTests
+          git clone --depth 1 --branch main https://github.com/Minedesso/essential-plugin.git /tmp/essential-plugin
+          git -C /tmp/essential-plugin rev-parse HEAD >> "${{ github.workspace }}/plugin-revisions.txt"
+          cd /tmp/essential-plugin && mvn -B -ntp clean verify
           cp target/essential-plugin-*.jar ${{ github.workspace }}/docker/citybuild/plugins/
           echo "version=$(ls target/essential-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
         id: essential
 
       - name: Build islewars-plugin
         run: |
-          git clone --depth 1 https://github.com/Minedesso/islewars-plugin.git /tmp/islewars-plugin
-          cd /tmp/islewars-plugin && mvn clean package -DskipTests
+          git clone --depth 1 --branch main https://github.com/Minedesso/islewars-plugin.git /tmp/islewars-plugin
+          git -C /tmp/islewars-plugin rev-parse HEAD >> "${{ github.workspace }}/plugin-revisions.txt"
+          cd /tmp/islewars-plugin && mvn -B -ntp clean verify
           cp target/islewars-plugin-*.jar ${{ github.workspace }}/docker/islewars/plugins/
           echo "version=$(ls target/islewars-plugin-*.jar | head -1 | xargs basename)" >> $GITHUB_OUTPUT
         id: islewars
+
+      - name: Upload source revisions
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-revisions
+          path: plugin-revisions.txt
+          if-no-files-found: error
 
       - name: Upload lobby plugins
         uses: actions/upload-artifact@v4
@@ -71,6 +101,7 @@ jobs:
           name: lobby-plugins
           path: docker/lobby/plugins/*.jar
           retention-days: 1
+          if-no-files-found: error
 
       - name: Upload citybuild plugins
         uses: actions/upload-artifact@v4
@@ -78,6 +109,7 @@ jobs:
           name: citybuild-plugins
           path: docker/citybuild/plugins/*.jar
           retention-days: 1
+          if-no-files-found: error
 
       - name: Upload islewars plugins
         uses: actions/upload-artifact@v4
@@ -85,6 +117,7 @@ jobs:
           name: islewars-plugins
           path: docker/islewars/plugins/*.jar
           retention-days: 1
+          if-no-files-found: error
 
   build-lobby:
     needs: [download-plugins]
@@ -103,6 +136,9 @@ jobs:
           name: lobby-plugins
           path: docker/lobby/plugins
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -117,6 +153,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.ORG }}/lobby
           tags: |
+            type=raw,value=run-${{ github.run_id }}-${{ github.run_attempt }}
             type=ref,event=branch
             type=sha,prefix={{branch}}-
             type=semver,pattern={{version}}
@@ -149,6 +186,9 @@ jobs:
           name: citybuild-plugins
           path: docker/citybuild/plugins
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -163,6 +203,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.ORG }}/citybuild
           tags: |
+            type=raw,value=run-${{ github.run_id }}-${{ github.run_attempt }}
             type=ref,event=branch
             type=sha,prefix={{branch}}-
             type=semver,pattern={{version}}
@@ -195,6 +236,9 @@ jobs:
           name: islewars-plugins
           path: docker/islewars/plugins
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -209,6 +253,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.ORG }}/islewars
           tags: |
+            type=raw,value=run-${{ github.run_id }}-${{ github.run_attempt }}
             type=ref,event=branch
             type=sha,prefix={{branch}}-
             type=semver,pattern={{version}}
@@ -223,3 +268,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [build-lobby, build-citybuild, build-islewars]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: {}
+    steps:
+      - name: Deploy the images built by this run
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          IMAGE_TAG: run-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/deploy_key' EXIT
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "deploy-minecraft $IMAGE_TAG"

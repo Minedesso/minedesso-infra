@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Install root-owned at /usr/local/bin/deploy-minecraft; invoked through sudo.
+if [[ $# != 1 || ! $1 =~ ^run-[0-9]+-[0-9]+$ ]]; then
+  echo 'Usage: deploy-minecraft run-RUN_ID-ATTEMPT' >&2
+  exit 2
+fi
+cd /opt/minecraft-dev
+exec 9>/run/lock/minedesso-deploy.lock
+flock -x 9
+umask 077
+candidate=$(mktemp .minecraft-images.XXXXXX)
+trap 'rm -f "$candidate"' EXIT
+printf 'LOBBY_VERSION=%s\nCITYBUILD_VERSION=%s\nISLEWARS_VERSION=%s\n' "$1" "$1" "$1" > "$candidate"
+compose=(docker compose --env-file .env --env-file "$candidate")
+# Pull everything before interrupting any running server. Volumes are preserved.
+"${compose[@]}" pull lobby citybuild islewars
+"${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 300 lobby citybuild islewars
+mv -f "$candidate" .minecraft-images.env
+echo "Minecraft deployment healthy: $1"

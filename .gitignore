@@ -2,3 +2,5 @@
 secrets/
 velocity/forwarding.secret
 backups/
+
+.minecraft-images.*

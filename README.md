@@ -122,13 +122,16 @@ minedesso-infra/
 | backend-api | ghcr.io/minedesso/backend-api | proxy-net, backend-net | HTTP 8080 |
 | islewars-api | ghcr.io/minedesso/islewars-api | proxy-net, backend-net | HTTP 8081 |
 | postgres | postgres:17-alpine | backend-net | pg_isready |
-| keycloak | keycloak:26.4 | proxy-net | HTTP health |
+| keycloak | quay.io/keycloak/keycloak:26.4 | proxy-net, backend-net | HTTP 9000 health |
 | velocity | papermc/velocity:3.3 | minecraft-net | - |
 | lobby | ghcr.io/minedesso/lobby | backend-net, minecraft-net | mc-monitor |
 | citybuild | ghcr.io/minedesso/citybuild | backend-net, minecraft-net | mc-monitor |
 | islewars | ghcr.io/minedesso/islewars | backend-net, minecraft-net | mc-monitor |
 
 ## Deployment
+
+For plugin-triggered builds, automatic VPS restarts, required GitHub secrets and
+the restricted SSH account, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ```bash
 ./scripts/deploy.sh

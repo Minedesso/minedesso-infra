@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Forced SSH command. Never evaluate commands supplied by the remote client.
+if [[ ${SSH_ORIGINAL_COMMAND:-} =~ ^deploy-minecraft\ (run-[0-9]+-[0-9]+)$ ]]; then
+  exec sudo -n /usr/local/bin/deploy-minecraft "${BASH_REMATCH[1]}"
+fi
+echo 'Only deploy-minecraft run-RUN_ID-ATTEMPT is allowed.' >&2
+exit 2

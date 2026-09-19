@@ -26,7 +26,7 @@ services:
       traefik.http.routers.dashboard.entrypoints: websecure
       traefik.http.routers.dashboard.tls: "true"
       traefik.http.routers.dashboard.tls.certresolver: letsencrypt
-      traefik.http.routers.dashboard.middlewares: dashboard-auth
+      traefik.http.routers.dashboard.middlewares: dashboard-auth@file
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 30s
@@ -65,7 +65,7 @@ services:
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/minedesso
       SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: ${BACKEND_API_DB_PASSWORD}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: ${KEYCLOAK_ISSUER_URI}
       SERVER_SERVLET_CONTEXT_PATH: /api
     networks:
@@ -82,7 +82,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/actuator/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -95,13 +95,13 @@ services:
     image: ghcr.io/minedesso/islewars-api:${ISLEWARS_API_VERSION}
     restart: unless-stopped
     environment:
-      ISLEWARS_DB_URL: jdbc:postgresql://postgres:5432/islewars
-      ISLEWARS_DB_USERNAME: postgres
-      ISLEWARS_DB_PASSWORD: ${ISLEWARS_API_DB_PASSWORD}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/islewars
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI}
       ISLEWARS_API_CLIENT_NAME: islewars-plugin
       ISLEWARS_API_CLIENT_KEY: ${ISLEWARS_API_CLIENT_KEY}
-      ISLEWARS_API_PORT: 8081
+      SERVER_PORT: 8081
     networks:
       - proxy-net
       - backend-net
@@ -116,7 +116,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -148,13 +148,13 @@ services:
   # Keycloak
   # ===========================================================================
   keycloak:
-    image: keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.4
     restart: unless-stopped
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: postgres
-      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       KC_HOSTNAME: auth.${DOMAIN}
@@ -167,6 +167,7 @@ services:
       - keycloak-data:/opt/keycloak/data
     networks:
       - proxy-net
+      - backend-net
     labels:
       traefik.enable: "true"
       traefik.http.routers.keycloak.rule: Host(`auth.${DOMAIN}`)
@@ -178,7 +179,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080; echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; cat <&3 | head -1 | grep '200'"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; cat <&3 | head -1 | grep '200'"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -207,6 +208,7 @@ services:
   lobby:
     image: ghcr.io/minedesso/lobby:${LOBBY_VERSION}
     restart: unless-stopped
+    stop_grace_period: 2m
     environment:
       EULA: "TRUE"
       MEMORY: 384M
@@ -235,6 +237,7 @@ services:
   citybuild:
     image: ghcr.io/minedesso/citybuild:${CITYBUILD_VERSION}
     restart: unless-stopped
+    stop_grace_period: 2m
     environment:
       EULA: "TRUE"
       MEMORY: 768M
@@ -263,6 +266,7 @@ services:
   islewars:
     image: ghcr.io/minedesso/islewars:${ISLEWARS_VERSION}
     restart: unless-stopped
+    stop_grace_period: 2m
     environment:
       EULA: "TRUE"
       MEMORY: 512M
@@ -273,7 +277,6 @@ services:
     volumes:
       - islewars-data:/data
       - islewars-logs:/logs
-      - ./islewars/config.yml:/plugins/islewars-plugin/config.yml:ro
       - ./islewars/config.yml:/plugins/islewars-plugin/config.yml:ro
     networks:
       - backend-net

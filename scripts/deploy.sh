@@ -3,11 +3,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+compose=(docker compose --env-file .env)
+if [[ -f .minecraft-images.env ]]; then
+  compose+=(--env-file .minecraft-images.env)
+fi
+
 echo "Pulling latest images..."
-docker compose pull
+"${compose[@]}" pull
 
 echo "Starting services..."
-docker compose up -d
+"${compose[@]}" up -d --wait --wait-timeout 300
 
 echo "Deployment complete."
-docker compose ps
+"${compose[@]}" ps

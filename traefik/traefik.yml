@@ -11,7 +11,15 @@ entryPoints:
   websecure:
     address: ":443"
 
+api:
+  dashboard: true
+
+ping: {}
+
 providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
   docker:
     exposedByDefault: false
     network: proxy-net
